@@ -16,6 +16,8 @@ A Laravel package to generate multilingual XML sitemaps with support for static 
   - [Translated Slugs (buildLocalizedUrls)](#translated-slugs-buildlocalizedurls)
   - [Multi-Segment URLs](#multi-segment-urls)
   - [Path Template Placeholders](#path-template-placeholders)
+  - [Query Parameters](#query-parameters)
+  - [Multiple URL Variants per Model](#multiple-url-variants-per-model)
 - [Generating the Sitemap](#generating-the-sitemap)
 - [Serving the Sitemap](#serving-the-sitemap)
 - [Artisan Commands](#artisan-commands)
@@ -198,6 +200,88 @@ slugResolver: fn($modelItem) => [
 ```
 
 The `$slugResolver` receives only the model item and returns a flat `[':placeholder' => 'value']` map. No locale logic is needed inside it — the locale-specific path structure is already defined in the template.
+
+---
+
+### Query Parameters
+
+A path template (and a static link `href` / `other_locs` entry) may end with a query string. Everything after the **first `?`** is treated as the query string: `?`, `&` and `=` keep their meaning, while parameter keys and values are encoded like path segments.
+
+```php
+public static function sitemapTranslatedSegments(): array
+{
+    return [
+        'en' => 'blogs/:modelIdentifier?target_country=eg',
+        'ar' => 'المدونة?target_country=eg',
+    ];
+}
+```
+
+Produces:
+
+```
+https://example.com/en/blogs/my-post?target_country=eg
+https://example.com/%D8%A7%D9%84%D9%85%D8%AF%D9%88%D9%86%D8%A9?target_country=eg
+```
+
+Placeholders work inside the query string too, so a parameter value can be dynamic:
+
+```php
+'en' => 'blogs/:modelIdentifier?target_country=:country',
+
+slugResolver: fn($blog) => [
+    ':modelIdentifier' => $blog->slug,
+    ':country' => $blog->country_code,
+],
+```
+
+Notes:
+
+- Multiple parameters are supported: `blogs?target_country=eg&sort=latest`.
+- A value-less parameter is kept as-is: `blogs?featured`.
+- An empty query string is dropped: `blogs?` becomes `blogs`.
+- A `?` inside a parameter value is encoded (`%3F`) — only the first one separates path from query.
+
+---
+
+### Multiple URL Variants per Model
+
+When one model record maps to **several** URLs (e.g. a blog targeting several countries), return a **list of replacement maps** from `$slugResolver` instead of a single map. Each map produces a full set of locale URLs:
+
+```php
+public static function sitemapTranslatedSegments(): array
+{
+    return [
+        'en' => 'blogs/:modelIdentifier?target_country=:targetCountry',
+        'ar' => ':modelIdentifier/المدونة?target_country=:targetCountry',
+    ];
+}
+
+public static function buildSitemapUrls(): array
+{
+    $blogs = self::visible()->with('targetCountries')->get();
+
+    return HandleDynamicSitemapHelper::buildLocalizedUrls(
+        modelItems: $blogs,
+        translatedSegments: self::sitemapTranslatedSegments(),
+        slugResolver: fn($blog) => $blog->targetCountries
+            ->map(fn($country) => [':targetCountry' => $country->code])
+            ->all(),
+    );
+}
+```
+
+A blog with 2 locales and 3 target countries yields 6 `<url>` entries. Alternates stay **within** a variant: the `?target_country=eg` URL only cross-links the `eg` variant of the other locales, so each country forms its own hreflang cluster.
+
+Both return shapes are supported:
+
+| `$slugResolver` returns | Result |
+|---|---|
+| `[':x' => 'y']` (map) | one URL per locale |
+| `[[':x' => 'y'], [':x' => 'z']]` (list of maps) | one URL per locale, per entry |
+| `[]` | one URL per locale, no extra placeholders resolved |
+
+> An **empty list** is treated as "no extra placeholders", not "no URLs" — a record with zero related rows would then emit URLs with the placeholder left unresolved. Filter those records out of the query (`->whereHas('targetCountries')`) or return a fallback map for them.
 
 ---
 
