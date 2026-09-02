@@ -70,6 +70,6 @@ class HandleStaticSitemapHelper
 
     private static function encodeHref(string $href): string
     {
-        return implode('/', array_map('rawurlencode', explode('/', $href)));
+        return SitemapHelperFunctions::encodeUrl($href);
     }
 }
